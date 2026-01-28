@@ -16,6 +16,8 @@ from conf import BOT_TOKEN, ADMIN_ID, BASE_USERS_DIR, MASTER_DB_FILE, TRANSLATIO
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
+LANG_CACHE = {}
+
 MSG_KEYS = [
     "text", "voice", "video_note", "photo", "video", 
     "audio", "sticker", "animation", "other"
@@ -25,6 +27,9 @@ class AdminStates(StatesGroup):
     waiting_for_broadcast = State()
 
 def get_lang(user_id):
+    if user_id in LANG_CACHE:
+        return LANG_CACHE[user_id]
+        
     try:
         db_path = get_user_db_path(user_id)
         if not os.path.exists(db_path):
@@ -36,9 +41,12 @@ def get_lang(user_id):
             if row:
                 lang = str(row[0])
                 if lang in TRANSLATIONS:
+                    LANG_CACHE[user_id] = lang
                     return lang
     except Exception:
         pass
+    
+    LANG_CACHE[user_id] = DEFAULT_LANG
     return DEFAULT_LANG
 
 def t(user_id, key):
@@ -177,8 +185,7 @@ async def cmd_start(message: types.Message):
             cursor = conn.execute("SELECT 1 FROM connections WHERE user_chat_id = ?", (user_id,))
             if cursor.fetchone():
                 is_authorized = True
-    except Exception:
-        pass 
+    except Exception: pass 
 
     if not is_authorized:
         u_lang = message.from_user.language_code
@@ -192,8 +199,7 @@ async def cmd_start(message: types.Message):
     lang_set = False
     with sqlite3.connect(db_path) as conn:
         cursor = conn.execute("SELECT value FROM settings WHERE key = 'language'")
-        if cursor.fetchone():
-            lang_set = True
+        if cursor.fetchone(): lang_set = True
 
     if not lang_set:
         kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -210,45 +216,34 @@ async def cmd_start(message: types.Message):
     with sqlite3.connect(db_path) as conn:
         cursor = conn.execute("SELECT COUNT(*) FROM archive_deleted")
         archive_count = cursor.fetchone()[0]
-        cursor = conn.execute("SELECT key, value FROM settings")
-        rows = cursor.fetchall()
-        db_settings = {row[0]: row[1] for row in rows}
 
-    keyboard = []
-    row = []
-
-    for m_key in MSG_KEYS:
-        if m_key == "other": continue
-    
-        val = db_settings.get(m_key)
-        is_enabled = bool(val) if val is not None else True
-        status_icon = "✅" if is_enabled else "❌"
-        
-
-        title = get_msg_type_name(user_id, m_key)
-        
-        btn = InlineKeyboardButton(text=f"{status_icon} {title}", callback_data=f"toggle_{m_key}")
-        row.append(btn)
-        if len(row) == 2:
-            keyboard.append(row)
-            row = []
-    if row: keyboard.append(row)
-
-    keyboard.append([InlineKeyboardButton(text=t(user_id, "btn_export_deleted"), callback_data="export_deleted")])
-    keyboard.append([InlineKeyboardButton(text=t(user_id, "btn_export_full"), callback_data="export_full")])
-    keyboard.append([InlineKeyboardButton(text=t(user_id, "btn_lang"), callback_data="change_lang")])
-    keyboard.append([InlineKeyboardButton(text=t(user_id, "btn_emergency"), callback_data="emergency_ask")])
-
-    kb_markup = InlineKeyboardMarkup(inline_keyboard=keyboard)
+    keyboard = [
+        [InlineKeyboardButton(text=t(user_id, "btn_settings"), callback_data="open_settings")],
+        [InlineKeyboardButton(text=t(user_id, "btn_export_deleted"), callback_data="export_deleted")],
+        [InlineKeyboardButton(text=t(user_id, "btn_export_full"), callback_data="export_full")],
+        [
+            InlineKeyboardButton(text=t(user_id, "btn_lang"), callback_data="change_lang"),
+            InlineKeyboardButton(text=t(user_id, "btn_emergency"), callback_data="emergency_ask")
+        ]
+    ]
 
     text = (
         f"{t(user_id, 'stats_header')}\n"
         f"{t(user_id, 'stats_count')} <b>{archive_count}</b>\n\n"
-        f"{t(user_id, 'settings_header')}"
+        f"{t(user_id, 'connect_success')}" 
     )
 
-    await message.answer(text, reply_markup=kb_markup, parse_mode="HTML")
+    try:
+        if isinstance(message, types.CallbackQuery):
+             await message.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard), parse_mode="HTML")
+        else:
+             await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard), parse_mode="HTML")
+    except:
+        await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard), parse_mode="HTML")
 
+@dp.callback_query(F.data == "back_to_main")
+async def back_to_main_menu(callback: CallbackQuery):
+    await cmd_start(callback)
 
 @dp.callback_query(F.data == "change_lang")
 async def ask_change_lang(callback: CallbackQuery):
@@ -272,6 +267,8 @@ async def set_language(callback: CallbackQuery):
     user_id = callback.from_user.id
     new_lang = callback.data.split("_")[1]
     
+    LANG_CACHE[user_id] = new_lang
+    
     db_path = get_user_db_path(user_id)
     with sqlite3.connect(db_path) as conn:
         conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('language', ?)", (new_lang,))
@@ -282,6 +279,10 @@ async def set_language(callback: CallbackQuery):
     await cmd_start(callback.message)
 
 
+@dp.callback_query(F.data == "open_settings")
+async def open_settings_menu(callback: CallbackQuery):
+    await render_settings_menu(callback)
+
 @dp.callback_query(F.data.startswith("toggle_"))
 async def on_toggle_setting(callback: CallbackQuery):
     user_id = callback.from_user.id
@@ -289,13 +290,21 @@ async def on_toggle_setting(callback: CallbackQuery):
     db_path = get_user_db_path(user_id)
     
     with sqlite3.connect(db_path) as conn:
-        cursor = conn.execute("SELECT value FROM settings WHERE key = ?", (msg_type,))
+        key_db = "notify_edit" if msg_type == "notify_edit" else msg_type
+        cursor = conn.execute("SELECT value FROM settings WHERE key = ?", (key_db,))
         row = cursor.fetchone()
         current_value = row[0] if row is not None else 1
         new_value = 0 if current_value else 1
-        conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (msg_type, new_value))
+        conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key_db, new_value))
         conn.commit()
     
+    await render_settings_menu(callback)
+
+
+async def render_settings_menu(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    db_path = get_user_db_path(user_id)
+
     with sqlite3.connect(db_path) as conn:
         cursor = conn.execute("SELECT key, value FROM settings")
         rows = cursor.fetchall()
@@ -303,6 +312,7 @@ async def on_toggle_setting(callback: CallbackQuery):
 
     keyboard = []
     row = []
+
     for m_key in MSG_KEYS:
         if m_key == "other": continue
         val = db_settings.get(m_key)
@@ -316,15 +326,22 @@ async def on_toggle_setting(callback: CallbackQuery):
             row = []
     if row: keyboard.append(row)
     
-    keyboard.append([InlineKeyboardButton(text=t(user_id, "btn_export_deleted"), callback_data="export_deleted")])
-    keyboard.append([InlineKeyboardButton(text=t(user_id, "btn_export_full"), callback_data="export_full")])
-    keyboard.append([InlineKeyboardButton(text=t(user_id, "btn_lang"), callback_data="change_lang")])
-    keyboard.append([InlineKeyboardButton(text=t(user_id, "btn_emergency"), callback_data="emergency_ask")])
+    val_edit = db_settings.get("notify_edit")
+    is_edit = bool(val_edit) if val_edit is not None else True
+    icon_edit = "✅" if is_edit else "❌"
+    keyboard.append([InlineKeyboardButton(
+        text=f"{icon_edit} {t(user_id, 'btn_toggle_edit')}", 
+        callback_data="toggle_notify_edit"
+    )])
+
+    keyboard.append([InlineKeyboardButton(text=t(user_id, "btn_back"), callback_data="back_to_main")])
+
+    text = t(user_id, 'settings_header')
     
     try:
-        await callback.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard))
-    except TelegramBadRequest: pass
-    await callback.answer()
+        await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard), parse_mode="HTML")
+    except TelegramBadRequest: 
+        await callback.answer()
 
 
 @dp.callback_query(F.data == "emergency_ask")
@@ -499,19 +516,22 @@ async def cmd_export_all(message: types.Message):
 
     report_path = f"full_{user_id}.txt"
     try:
+
+        rows = []
         with sqlite3.connect(db_path) as conn:
-            rows = conn.execute("SELECT date_time, direction, sender_name, msg_type, content, caption, chat_title FROM history_log ORDER BY date_time ASC").fetchall()
+            cursor = conn.execute("SELECT date_time, direction, sender_name, msg_type, content, caption, chat_title FROM history_log ORDER BY date_time ASC")
+            rows = cursor.fetchall()
         
         if not rows:
             await bot.send_message(user_id, t(user_id, "export_empty"))
             return
 
+
         with open(report_path, "w", encoding="utf-8") as f:
             f.write(t(user_id, "export_full_title") + "\n")
-            f.write("=========================================\n\n")
+            f.write("="*40 + "\n\n")
             for r in rows:
                 date, direction, author, m_type, content, caption, chat = r
-                
                 readable_type = get_msg_type_name(user_id, m_type)
                 dir_arrow = t(user_id, "txt_incoming") if direction == "incoming" else t(user_id, "txt_outgoing")
                 readable_content = content if m_type == "text" else t(user_id, "txt_media_file")
@@ -526,9 +546,16 @@ async def cmd_export_all(message: types.Message):
                 if caption: f.write(f"{txt_capt} {caption}\n")
                 f.write("-" * 40 + "\n\n")
 
-        await bot.send_document(user_id, document=FSInputFile(report_path), caption=t(user_id, "export_caption_full"))
-        os.remove(report_path)
+
+        document = FSInputFile(report_path)
+        await bot.send_document(user_id, document=document, caption=t(user_id, "export_caption_full"))
+        
+
+        if os.path.exists(report_path):
+            os.remove(report_path)
+
     except Exception as e:
+        logging.error(f"Export error: {e}")
         await bot.send_message(user_id, f"Error: {e}")
 
 
@@ -600,6 +627,82 @@ async def log_message(message: types.Message):
             conn.commit()
     except Exception: pass
 
+@dp.edited_business_message()
+async def handle_edited(message: types.Message):
+    owner_id = None
+    with sqlite3.connect(MASTER_DB_FILE) as conn:
+        cursor = conn.execute("SELECT user_chat_id FROM connections WHERE connection_id = ?", (message.business_connection_id,))
+        row = cursor.fetchone()
+        if row: owner_id = row[0]
+    if not owner_id: return
+
+    key = f"{message.business_connection_id}:{message.message_id}"
+    user_db_path = get_user_db_path(owner_id)
+
+    try:
+        with sqlite3.connect(user_db_path) as conn:
+            cursor = conn.execute("SELECT msg_type, content, caption, author_name, author_username, chat_title FROM active_messages WHERE key_id = ?", (key,))
+            data = cursor.fetchone()
+
+            if data:
+                msg_type, old_content, old_caption, author_name, author_username, chat_title = data
+                
+                cursor_setting = conn.execute("SELECT value FROM settings WHERE key = ?", (msg_type,))
+                row_setting = cursor_setting.fetchone()
+                is_type_enabled = bool(row_setting[0]) if row_setting is not None else True
+
+                cursor_edit = conn.execute("SELECT value FROM settings WHERE key = 'notify_edit'")
+                row_edit = cursor_edit.fetchone()
+                is_edit_enabled = bool(row_edit[0]) if row_edit is not None else True
+
+                old_text = ""
+                new_text = ""
+                has_changes = False
+
+                if msg_type == "text":
+                    old_text = old_content
+                    new_text = message.text or ""
+                    if old_text != new_text:
+                        has_changes = True
+                
+                elif msg_type in ["photo", "video", "document", "audio", "voice"]:
+                    old_text = old_caption or ""
+                    new_text = message.caption or ""
+                    if old_text != new_text:
+                        has_changes = True
+
+                if has_changes and is_type_enabled and is_edit_enabled:
+                    curr_time = datetime.datetime.now().strftime("%H:%M")
+                    safe_author = html.escape(author_name)
+                    safe_username = html.escape(author_username)
+                    safe_chat = html.escape(chat_title)
+                    
+                    safe_old = html.escape(old_text)
+                    safe_new = html.escape(new_text)
+
+                    text_report = (
+                        f"<blockquote><b>Сообщение изменено</b> | {curr_time}\n"
+                        f"<b>От:</b> {safe_author} (<code>{safe_username}</code>)\n"
+                        f"<b>Чат:</b> {safe_chat}\n"
+                        f"<b>Было:</b> <tg-spoiler>{safe_old}</tg-spoiler></blockquote>\n\n"
+                        f"<b>Стало:</b>\n{safe_new}"
+                    )
+                    
+                    try:
+                        await bot.send_message(owner_id, text_report, parse_mode="HTML")
+                    except Exception:
+                        pass
+
+                if msg_type == "text":
+                    conn.execute("UPDATE active_messages SET content = ? WHERE key_id = ?", (new_text, key))
+                else:
+                    conn.execute("UPDATE active_messages SET caption = ? WHERE key_id = ?", (new_text, key))
+                
+                conn.commit()
+
+    except Exception as e:
+        print(f"Edit Handle Error: {e}")
+
 @dp.deleted_business_messages()
 async def handle_deleted(event: BusinessMessagesDeleted):
     owner_id = None
@@ -630,52 +733,51 @@ async def handle_deleted(event: BusinessMessagesDeleted):
                         safe_chat = html.escape(chat_title)
                         safe_caption = html.escape(caption) if caption else ""
 
-                        l_rep_del = t(owner_id, "report_deleted")
-                        l_rep_from = t(owner_id, "report_from")
-                        l_rep_chat = t(owner_id, "report_chat")
-                        l_rep_capt = t(owner_id, "report_caption")
-                        l_rep_txt = t(owner_id, "report_text")
-                        l_rep_circ = t(owner_id, "report_circle")
-                        l_rep_stik = t(owner_id, "report_sticker")
-
                         header = (
-                            f"{l_rep_del} | {curr_time}\n"
-                            f"➖➖➖➖➖➖➖➖➖➖\n"
-                            f"{l_rep_from} {safe_author} (<code>{safe_username}</code>)\n"
-                            f"{l_rep_chat} {safe_chat}\n"
-                            f"➖➖➖➖➖➖➖➖➖➖"
+                            f"<blockquote><b>Сообщение удалено</b> | {curr_time}\n"
+                            f"<b>От:</b> {safe_author} (<code>{safe_username}</code>)\n"
+                            f"<b>Чат:</b> {safe_chat}</blockquote>"
                         )
-                        full_caption = f"{header}\n\n{l_rep_capt} {safe_caption}" if safe_caption else header
+
+                        full_caption = f"{header}\n\n<b>Подпись:</b>\n{safe_caption}" if safe_caption else header
 
                         try:
                             if msg_type == "text":
-                                await bot.send_message(owner_id, f"{header}\n\n{l_rep_txt}\n{html.escape(content)}", parse_mode="HTML")
+                                await bot.send_message(owner_id, f"{header}\n\n<b>Текст:</b>\n{html.escape(content)}", parse_mode="HTML")
+                            
                             elif msg_type == "voice":
                                 try:
                                     await bot.send_voice(owner_id, voice=content, caption=header, parse_mode="HTML")
                                 except:
-                                    await bot.send_message(owner_id, f"{header}\n\n{t(owner_id, 'err_voice')}", parse_mode="HTML")
-                                    await download_and_send_file(owner_id, content, "voice.ogg", f"{header}\n{t(owner_id, 'err_file_restored')}")
+                                    await bot.send_message(owner_id, f"{header}\n\n⚠️ Ошибка голосового, файл ниже:", parse_mode="HTML")
+                                    await download_and_send_file(owner_id, content, "voice.ogg", header)
+                            
                             elif msg_type == "audio":
                                 await bot.send_audio(owner_id, audio=content, caption=header, parse_mode="HTML")
+                            
                             elif msg_type == "video_note":
-                                await bot.send_message(owner_id, f"{header}\n{l_rep_circ}", parse_mode="HTML")
+                                await bot.send_message(owner_id, f"{header}\n<i>(Видеосообщение ниже)</i>", parse_mode="HTML")
                                 try:
                                     await bot.send_video_note(owner_id, video_note=content)
                                 except:
-                                    await bot.send_message(owner_id, t(owner_id, 'err_video_note'), parse_mode="HTML")
-                                    await download_and_send_file(owner_id, content, "circle.mp4", f"{t(owner_id, 'err_file_restored')}")
+                                    await bot.send_message(owner_id, "⚠️ Ошибка кружочка, файл:", parse_mode="HTML")
+                                    await download_and_send_file(owner_id, content, "circle.mp4", "(Файл)")
+                            
                             elif msg_type == "photo":
                                 await bot.send_photo(owner_id, photo=content, caption=full_caption, parse_mode="HTML")
+                            
                             elif msg_type == "video":
                                 await bot.send_video(owner_id, video=content, caption=full_caption, parse_mode="HTML")
+                            
                             elif msg_type == "sticker":
-                                await bot.send_message(owner_id, f"{header}\n{l_rep_stik}", parse_mode="HTML")
+                                await bot.send_message(owner_id, f"{header}\n<i>(Стикер ниже)</i>", parse_mode="HTML")
                                 await bot.send_sticker(owner_id, sticker=content)
+                            
                             elif msg_type == "animation":
                                 await bot.send_animation(owner_id, animation=content, caption=full_caption, parse_mode="HTML")
+                        
                         except Exception as e:
-                            try: await bot.send_message(owner_id, f"{t(owner_id, 'err_generic')} {html.escape(str(e))}", parse_mode="HTML")
+                            try: await bot.send_message(owner_id, f"⚠️ Ошибка восстановления: {html.escape(str(e))}", parse_mode="HTML")
                             except: pass
                     
                     conn.execute("INSERT INTO archive_deleted (msg_type, content, caption, author_name, author_username, chat_title) VALUES (?, ?, ?, ?, ?, ?)", (msg_type, content, caption, author_name, author_username, chat_title))
@@ -687,7 +789,7 @@ async def main():
     ensure_dirs()
     init_master_db()
     await bot.delete_webhook(drop_pending_updates=True)
-    print("Бот запущен...")
+    print("Bot started...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
@@ -695,4 +797,4 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("Бот остановлен")
+        print("Bot stopped")

@@ -1,5 +1,5 @@
-BOT_TOKEN = "YOUR_BOT_TOKEN_FROM_BOTFATHER"
-ADMIN_ID = 
+BOT_TOKEN = "..."
+ADMIN_ID = ...
 BASE_USERS_DIR = "users"
 MASTER_DB_FILE = "master.db"
 
@@ -21,11 +21,14 @@ TRANSLATIONS = {
         "btn_export_deleted": "📥 Скачать удаленные",
         "btn_export_full": "📚 Скачать всю историю",
         "btn_emergency": "🚨 Экстренное удаление",
+        "btn_toggle_edit": "✏️ Изменения",
         "btn_lang": "🌍 Язык / Language / Мова",
         "btn_cancel": "🔙 Отмена",
         "btn_confirm_delete": "💣 ДА, УДАЛИТЬ ВСЁ",
         "btn_admin_broadcast": "📢 Рассылка",
         "btn_close": "❌ Закрыть",
+        "btn_settings": "⚙️ Настройки уведомлений",
+        "btn_back": "🔙 Назад",
 
         "connect_success": "✅ <b>Бот подключен!</b>\nВведите /start для настройки.",
         
@@ -92,11 +95,14 @@ TRANSLATIONS = {
         "btn_export_deleted": "📥 Download Deleted",
         "btn_export_full": "📚 Download History",
         "btn_emergency": "🚨 Emergency Delete",
+        "btn_toggle_edit": "✏️ Edits",
         "btn_lang": "🌍 Language",
         "btn_cancel": "🔙 Cancel",
         "btn_confirm_delete": "💣 YES, DELETE ALL",
         "btn_admin_broadcast": "📢 Broadcast",
         "btn_close": "❌ Close",
+        "btn_settings": "⚙️ Notification Settings",
+        "btn_back": "🔙 Back",
 
         "connect_success": "✅ <b>Bot connected!</b>\nType /start to configure.",
         
@@ -163,11 +169,14 @@ TRANSLATIONS = {
         "btn_export_deleted": "📥 Скачати видалені",
         "btn_export_full": "📚 Скачати всю історію",
         "btn_emergency": "🚨 Екстрене видалення",
+        "btn_toggle_edit": "✏️ Зміни",
         "btn_lang": "🌍 Мова",
         "btn_cancel": "🔙 Скасувати",
         "btn_confirm_delete": "💣 ТАК, ВИДАЛИТИ ВСЕ",
         "btn_admin_broadcast": "📢 Розсилка",
         "btn_close": "❌ Закрити",
+        "btn_settings": "⚙️ Налаштування сповіщень",
+        "btn_back": "🔙 Назад",
 
         "connect_success": "✅ <b>Бот підключений!</b>\nВведіть /start для налаштування.",
 
